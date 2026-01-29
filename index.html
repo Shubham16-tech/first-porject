@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gesture Controlled 3D Particle System</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      background: rgba(0,0,0,0.6);
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    video { display: none; }
+  </style>
+</head>
+<body>
+  <div id="info">
+    ✋ Hand distance → Particle expansion<br />
+    ✊ Closed fist → Change shape<br />
+    🎨 Hand height → Color shift
+  </div>
+  <video id="video" autoplay playsinline></video>
+
+  <!-- Three.js -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <!-- MediaPipe Hands -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <script>
+    /* -------------------- THREE.JS SETUP -------------------- */
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.z = 120;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const particleCount = 6000;
+    let geometry = new THREE.BufferGeometry();
+    let positions = new Float32Array(particleCount * 3);
+    let colors = new Float32Array(particleCount * 3);
+
+    const material = new THREE.PointsMaterial({
+      size: 1.6,
+      vertexColors: true,
+      transparent: true
+    });
+
+    let particles = new THREE.Points(geometry, material);
+    scene.add(particles);
+
+    /* -------------------- SHAPE GENERATORS -------------------- */
+    const shapes = {
+      heart: (i, scale) => {
+        const t = (i / particleCount) * Math.PI * 2;
+        return [
+          scale * 16 * Math.pow(Math.sin(t), 3),
+          scale * (13 * Math.cos(t) - 5 * Math.cos(2 * t)),
+          scale * Math.sin(t) * 10
+        ];
+      },
+      saturn: (i, scale) => {
+        const t = Math.random() * Math.PI * 2;
+        const r = scale * (30 + Math.random() * 10);
+        return [
+          Math.cos(t) * r,
+          (Math.random() - 0.5) * 5,
+          Math.sin(t) * r
+        ];
+      },
+      fireworks: (i, scale) => {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const r = Math.random() * scale * 40;
+        return [
+          r * Math.sin(phi) * Math.cos(theta),
+          r * Math.sin(phi) * Math.sin(theta),
+          r * Math.cos(phi)
+        ];
+      },
+      flower: (i, scale) => {
+        const t = (i / particleCount) * Math.PI * 2;
+        const r = scale * (20 + 10 * Math.sin(6 * t));
+        return [Math.cos(t) * r, Math.sin(t) * r, Math.sin(t) * 5];
+      }
+    };
+
+    let currentShape = 'heart';
+
+    function generateParticles(scale = 1, hue = 0) {
+      for (let i = 0; i < particleCount; i++) {
+        const [x, y, z] = shapes[currentShape](i, scale);
+        positions[i * 3] = x;
+        positions[i * 3 + 1] = y;
+        positions[i * 3 + 2] = z;
+
+        const color = new THREE.Color(`hsl(${hue},100%,60%)`);
+        colors[i * 3] = color.r;
+        colors[i * 3 + 1] = color.g;
+        colors[i * 3 + 2] = color.b;
+      }
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      geometry.attributes.position.needsUpdate = true;
+      geometry.attributes.color.needsUpdate = true;
+    }
+
+    generateParticles(1, 0);
+
+    /* -------------------- HAND TRACKING -------------------- */
+    const video = document.getElementById('video');
+    let handDistance = 1;
+    let handHeight = 0;
+    let fistClosed = false;
+
+    const hands = new Hands({
+      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7
+    });
+
+    hands.onResults(results => {
+      if (!results.multiHandLandmarks) return;
+      const lm = results.multiHandLandmarks[0];
+
+      const thumb = lm[4];
+      const index = lm[8];
+      handDistance = Math.hypot(thumb.x - index.x, thumb.y - index.y) * 10;
+      handHeight = lm[0].y;
+      fistClosed = handDistance < 0.3;
+    });
+
+    const cameraFeed = new Camera(video, {
+      onFrame: async () => await hands.send({ image: video }),
+      width: 640,
+      height: 480
+    });
+    cameraFeed.start();
+
+    /* -------------------- ANIMATION LOOP -------------------- */
+    let hue = 0;
+    let shapeIndex = 0;
+    const shapeKeys = Object.keys(shapes);
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      hue = (1 - handHeight) * 360;
+
+      if (fistClosed) {
+        shapeIndex = (shapeIndex + 1) % shapeKeys.length;
+        currentShape = shapeKeys[shapeIndex];
+        fistClosed = false;
+      }
+
+      generateParticles(handDistance, hue);
+      particles.rotation.y += 0.002;
+      particles.rotation.x += 0.001;
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    /* -------------------- RESPONSIVE -------------------- */
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
